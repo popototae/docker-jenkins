@@ -9,8 +9,6 @@ pipeline {
     environment {
         // Build Information
         BUILD_TAG = "${env.BUILD_NUMBER}"
-        BUILD_API = 'false'
-        BUILD_FRONTEND = 'false'
     }
 
     parameters {
@@ -46,17 +44,38 @@ pipeline {
         }
 
         stage('Unit Test') {
-            steps {
-                echo "Running API Unit Tests (Fail-Fast)..."
-                dir('01_api') {
-                    script {
-                        sh '''
-                            if command -v npm >/dev/null 2>&1; then
-                                npm test
-                            else
-                                docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm install --omit=dev=false && npm test"
-                            fi
-                        '''
+            parallel {
+                stage('Test API') {
+                    steps {
+                        echo "Running API Unit Tests (Fail-Fast)..."
+                        dir('01_api') {
+                            script {
+                                sh '''
+                                    if command -v npm >/dev/null 2>&1; then
+                                        npm test
+                                    else
+                                        docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm install --omit=dev=false && npm test"
+                                    fi
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Test Frontend') {
+                    steps {
+                        echo "Running Frontend Unit Tests (Fail-Fast)..."
+                        dir('02_frontend') {
+                            script {
+                                sh '''
+                                    if command -v npm >/dev/null 2>&1; then
+                                        npm test
+                                    else
+                                        docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm install --omit=dev=false && npm test"
+                                    fi
+                                '''
+                            }
+                        }
                     }
                 }
             }
@@ -177,25 +196,27 @@ API_HOST=${params.API_HOST}
         stage('Build Services') {
             parallel {
                 stage('Build API') {
-                    when {
-                        expression { return env.BUILD_API == 'true' }
-                    }
                     steps {
                         script {
-                            echo "Building API service..."
-                            sh 'docker compose build --no-cache api'
+                            if (env.BUILD_API == 'true') {
+                                echo ">>> Changes detected in API. Building API service..."
+                                sh 'docker compose build --no-cache api'
+                            } else {
+                                echo ">>> No API changes detected (BUILD_API=${env.BUILD_API}). Skipping API build."
+                            }
                         }
                     }
                 }
 
                 stage('Build Frontend') {
-                    when {
-                        expression { return env.BUILD_FRONTEND == 'true' }
-                    }
                     steps {
                         script {
-                            echo "Building Frontend service..."
-                            sh 'docker compose build --no-cache frontend'
+                            if (env.BUILD_FRONTEND == 'true') {
+                                echo ">>> Changes detected in Frontend. Building Frontend service..."
+                                sh 'docker compose build --no-cache frontend'
+                            } else {
+                                echo ">>> No Frontend changes detected (BUILD_FRONTEND=${env.BUILD_FRONTEND}). Skipping Frontend build."
+                            }
                         }
                     }
                 }
@@ -212,8 +233,8 @@ API_HOST=${params.API_HOST}
                         sh 'docker compose down -v'
                     }
 
-                    // docker compose up -d will recreate containers whose images were updated
-                    sh 'docker compose up -d'
+                    // Recreate any containers whose images were updated
+                    sh 'docker compose up -d --remove-orphans'
 
                     echo "Deployment completed"
                 }
@@ -224,7 +245,7 @@ API_HOST=${params.API_HOST}
             steps {
                 script {
                     echo "Waiting for services to start..."
-                    sh 'sleep 15'
+                    sh 'sleep 10'
 
                     echo "Performing health check..."
 
@@ -233,12 +254,18 @@ API_HOST=${params.API_HOST}
                         docker compose ps
 
                         # Wait for API to be ready (max 60 seconds)
+                        echo "Checking API health (port 3001)..."
                         timeout 60 bash -c 'until curl -f http://localhost:3001/health; do sleep 2; done' || exit 1
 
                         # Check attractions endpoint
+                        echo "Checking API attractions endpoint..."
                         curl -f http://localhost:3001/attractions || exit 1
 
-                        echo "Health check passed!"
+                        # Wait for Frontend to be ready (max 60 seconds)
+                        echo "Checking Frontend (port 3000)..."
+                        timeout 60 bash -c 'until curl -f http://localhost:3000; do sleep 2; done' || exit 1
+
+                        echo "All health checks passed!"
                     """
                 }
             }
