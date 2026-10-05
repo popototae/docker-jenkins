@@ -258,7 +258,12 @@ API_HOST_INTERNAL=http://api:3001
 
                         # Wait for Frontend to be ready (max 90 seconds)
                         echo "Checking Frontend (port 3000)..."
-                        timeout 90 bash -c 'until curl -s -f -m 5 --connect-timeout 3 -o /dev/null http://localhost:3000 || curl -s -f -m 5 --connect-timeout 3 -o /dev/null http://127.0.0.1:3000; do echo "Waiting for Frontend to respond..."; sleep 3; done' || exit 1
+                        timeout 90 bash -c 'until curl -4 -s -f --connect-timeout 5 -m 30 -o /dev/null http://127.0.0.1:3000; do echo "Waiting for Frontend to respond..."; sleep 3; done' || {
+                            echo "Frontend health check failed. Showing container logs:"
+                            docker compose logs --tail=50 frontend
+                            curl -4 -v http://127.0.0.1:3000 || true
+                            exit 1
+                        }
 
                         echo "All health checks passed!"
                     """
