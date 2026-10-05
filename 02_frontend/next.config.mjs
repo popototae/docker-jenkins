@@ -1,10 +1,20 @@
 /** @type {import('next').NextConfig} */
-const API_HOST = process.env.API_HOST || "http://localhost:3001";
-
 const nextConfig = {
   output: "standalone",
-  env: {
-    NEXT_PUBLIC_API_HOST: API_HOST,
+  async rewrites() {
+    const apiHost =
+      process.env.API_HOST_INTERNAL ||
+      (process.env.NODE_ENV === "production" ? "http://api:3001" : "http://localhost:3001");
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${apiHost}/:path*`,
+      },
+      {
+        source: "/attractions",
+        destination: `${apiHost}/attractions`,
+      },
+    ];
   },
 };
 

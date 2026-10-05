@@ -10,8 +10,7 @@ export default function Page() {
   useEffect(() => {
     async function getAttractions() {
       try {
-        const apiHost = process.env.NEXT_PUBLIC_API_HOST;
-        const res = await fetch(`${apiHost}/attractions`, {
+        const res = await fetch("/api/attractions", {
           cache: "no-store",
         });
         if (!res.ok) throw new Error("Failed to fetch");

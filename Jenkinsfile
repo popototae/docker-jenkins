@@ -22,11 +22,6 @@ pipeline {
             defaultValue: false,
             description: 'Force rebuild both API and Frontend regardless of git changes'
         )
-        string(
-            name: 'API_HOST',
-            defaultValue: 'http://138.2.70.183:3001',
-            description: 'API host URL for frontend to connect to.'
-        )
     }
 
     stages {
@@ -111,7 +106,7 @@ API_PORT=3001
 DB_PORT=3306
 FRONTEND_PORT=3000
 NODE_ENV=production
-API_HOST=${params.API_HOST}
+API_HOST_INTERNAL=http://api:3001
 """.stripIndent()
 
                         echo ".env file created successfully"

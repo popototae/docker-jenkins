@@ -1,12 +1,11 @@
 # ---------- Stage 1: Build the Next.js application ----------
 FROM node:20-alpine AS builder
-ARG API_HOST=http://localhost:3001
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci && npm cache clean --force
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1 \
-    API_HOST=${API_HOST}
+    NODE_ENV=production
 RUN npm run build
 
 # ---------- Stage 2: Production runtime ----------
@@ -15,7 +14,8 @@ WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
-    HOSTNAME="0.0.0.0"
+    HOSTNAME="0.0.0.0" \
+    API_HOST_INTERNAL="http://api:3001"
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

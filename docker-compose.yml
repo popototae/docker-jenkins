@@ -39,13 +39,11 @@ services:
       - stack
 
   frontend:
-    build:
-      context: ./02_frontend
-      args:
-        API_HOST: ${API_HOST:-http://localhost:3001}
+    build: ./02_frontend
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      API_HOST_INTERNAL: http://api:3001
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
