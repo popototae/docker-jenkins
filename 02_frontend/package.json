@@ -10,9 +10,10 @@
     "test": "jest"
   },
   "dependencies": {
-    "next": "15.5.0",
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "docker-jenkins-monorepo": "file:..",
+    "next": "15.5.27",
+    "react": "19.1.9",
+    "react-dom": "19.1.9"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -20,9 +21,13 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "eslint": "^9",
-    "eslint-config-next": "15.5.0",
+    "eslint-config-next": "15.5.27",
     "jest": "^30.5.2",
     "jest-environment-jsdom": "^30.5.2"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.29"
+    }
   }
 }
-

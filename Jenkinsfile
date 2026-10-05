@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    options {
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+    }
+
     triggers {
         // Poll SCM as fallback if webhook fails
         pollSCM('H/2 * * * *')
@@ -12,11 +17,6 @@ pipeline {
     }
 
     parameters {
-        booleanParam(
-            name: 'CLEAN_VOLUMES',
-            defaultValue: true,
-            description: 'Remove volumes (clears database)'
-        )
         booleanParam(
             name: 'FORCE_BUILD_ALL',
             defaultValue: false,
@@ -47,9 +47,10 @@ pipeline {
                             script {
                                 sh '''
                                     if command -v npm >/dev/null 2>&1; then
+                                        npm ci --include=dev
                                         npm test
                                     else
-                                        docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm install --omit=dev=false && npm test"
+                                        docker run --rm -v "$(pwd):/app" -w /app node:22-alpine sh -c "npm ci --include=dev && npm test"
                                     fi
                                 '''
                             }
@@ -64,23 +65,15 @@ pipeline {
                             script {
                                 sh '''
                                     if command -v npm >/dev/null 2>&1; then
+                                        npm ci --include=dev
                                         npm test
                                     else
-                                        docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm install --omit=dev=false && npm test"
+                                        docker run --rm -v "$(pwd):/app" -w /app node:22-alpine sh -c "npm ci --include=dev && npm test"
                                     fi
                                 '''
                             }
                         }
                     }
-                }
-            }
-        }
-
-        stage('Validate') {
-            steps {
-                script {
-                    echo "Validating Docker Compose configuration..."
-                    sh 'docker compose config'
                 }
             }
         }
@@ -109,6 +102,7 @@ NODE_ENV=production
 API_HOST_INTERNAL=http://api:3001
 """.stripIndent()
 
+                        sh 'chmod 600 .env'
                         echo ".env file created successfully"
                     }
 
@@ -188,6 +182,13 @@ API_HOST_INTERNAL=http://api:3001
             }
         }
 
+        stage('Validate') {
+            steps {
+                echo "Validating Docker Compose configuration..."
+                sh 'docker compose config --quiet'
+            }
+        }
+
         stage('Build Services') {
             parallel {
                 stage('Build API') {
@@ -195,7 +196,7 @@ API_HOST_INTERNAL=http://api:3001
                         script {
                             if (env.BUILD_API == 'true') {
                                 echo ">>> Changes detected in API. Building API service..."
-                                sh 'docker compose build --no-cache api'
+                                sh 'docker compose build --pull --no-cache api'
                             } else {
                                 echo ">>> No API changes detected (BUILD_API=${env.BUILD_API}). Skipping API build."
                             }
@@ -208,7 +209,7 @@ API_HOST_INTERNAL=http://api:3001
                         script {
                             if (env.BUILD_FRONTEND == 'true') {
                                 echo ">>> Changes detected in Frontend. Building Frontend service..."
-                                sh 'docker compose build --no-cache frontend'
+                                sh 'docker compose build --pull --no-cache frontend'
                             } else {
                                 echo ">>> No Frontend changes detected (BUILD_FRONTEND=${env.BUILD_FRONTEND}). Skipping Frontend build."
                             }
@@ -223,13 +224,8 @@ API_HOST_INTERNAL=http://api:3001
                 script {
                     echo "Deploying to production using Docker Compose..."
 
-                    if (params.CLEAN_VOLUMES) {
-                        echo "WARNING: Removing volumes (database will be cleared)"
-                        sh 'docker compose down -v'
-                    }
-
-                    // Recreate any containers whose images were updated
-                    sh 'docker compose up -d --remove-orphans'
+                    // Preserve database volumes, including when an older job still has CLEAN_VOLUMES set.
+                    sh 'docker compose up -d --remove-orphans --wait --wait-timeout 180'
 
                     echo "Deployment completed"
                 }
@@ -239,34 +235,7 @@ API_HOST_INTERNAL=http://api:3001
         stage('Health Check') {
             steps {
                 script {
-                    echo "Waiting for services to start..."
-                    sh 'sleep 15'
-
-                    echo "Performing health check..."
-
-                    sh """
-                        # Check if containers are running
-                        docker compose ps
-
-                        # Wait for API to be ready (max 60 seconds)
-                        echo "Checking API health (port 3001)..."
-                        timeout 60 bash -c 'until curl -s -f -m 5 --connect-timeout 3 http://localhost:3001/health || curl -s -f -m 5 --connect-timeout 3 http://127.0.0.1:3001/health; do sleep 2; done' || exit 1
-
-                        # Check attractions endpoint
-                        echo "Checking API attractions endpoint..."
-                        curl -s -f -m 10 http://localhost:3001/attractions || curl -s -f -m 10 http://127.0.0.1:3001/attractions || exit 1
-
-                        # Wait for Frontend to be ready (max 90 seconds)
-                        echo "Checking Frontend (port 3000)..."
-                        timeout 90 bash -c 'until curl -4 -s -f --connect-timeout 5 -m 30 -o /dev/null http://127.0.0.1:3000; do echo "Waiting for Frontend to respond..."; sleep 3; done' || {
-                            echo "Frontend health check failed. Showing container logs:"
-                            docker compose logs --tail=50 frontend
-                            curl -4 -v http://127.0.0.1:3000 || true
-                            exit 1
-                        }
-
-                        echo "All health checks passed!"
-                    """
+                    sh 'sh scripts/check-deployment.sh'
                 }
             }
         }
@@ -310,13 +279,6 @@ API_HOST_INTERNAL=http://api:3001
                 echo "Printing container logs for debugging..."
                 sh 'docker compose logs --tail=50 || true'
             }
-        }
-        always {
-            echo "Cleaning up old Docker resources..."
-            sh """
-                docker image prune -f
-                docker container prune -f
-            """
         }
     }
 }
