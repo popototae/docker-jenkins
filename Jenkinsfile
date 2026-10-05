@@ -9,7 +9,8 @@ pipeline {
     environment {
         // Build Information
         BUILD_TAG = "${env.BUILD_NUMBER}"
-        // Compute short commit inside a step (not inlined in env with sh)
+        BUILD_API = 'false'
+        BUILD_FRONTEND = 'false'
     }
 
     parameters {
@@ -17,6 +18,11 @@ pipeline {
             name: 'CLEAN_VOLUMES',
             defaultValue: true,
             description: 'Remove volumes (clears database)'
+        )
+        booleanParam(
+            name: 'FORCE_BUILD_ALL',
+            defaultValue: false,
+            description: 'Force rebuild both API and Frontend regardless of git changes'
         )
         string(
             name: 'API_HOST',
@@ -39,6 +45,23 @@ pipeline {
             }
         }
 
+        stage('Unit Test') {
+            steps {
+                echo "Running API Unit Tests (Fail-Fast)..."
+                dir('01_api') {
+                    script {
+                        sh '''
+                            if command -v npm >/dev/null 2>&1; then
+                                npm test
+                            else
+                                docker run --rm -v "$(pwd):/app" -w /app node:20-alpine sh -c "npm install --omit=dev=false && npm test"
+                            fi
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Validate') {
             steps {
                 script {
@@ -48,7 +71,7 @@ pipeline {
             }
         }
 
-        stage('Prepare Environment') {
+        stage('Prepare Environment & Detect Changes') {
             steps {
                 script {
                     echo "Preparing environment configuration..."
@@ -72,8 +95,108 @@ NODE_ENV=production
 API_HOST=${params.API_HOST}
 """.stripIndent()
 
-                        // Avoid printing secrets
                         echo ".env file created successfully"
+                    }
+
+                    // Change Detection
+                    echo "Detecting changed services..."
+                    def shouldBuildApi = false
+                    def shouldBuildFrontend = false
+
+                    if (params.FORCE_BUILD_ALL) {
+                        echo "FORCE_BUILD_ALL is enabled. Building both API and Frontend."
+                        shouldBuildApi = true
+                        shouldBuildFrontend = true
+                    } else {
+                        // Check if images exist locally
+                        def apiImage = sh(script: 'docker compose images -q api 2>/dev/null || true', returnStdout: true).trim()
+                        def frontendImage = sh(script: 'docker compose images -q frontend 2>/dev/null || true', returnStdout: true).trim()
+
+                        if (!apiImage) {
+                            echo "API Docker image not found locally. Flagging for build."
+                            shouldBuildApi = true
+                        }
+                        if (!frontendImage) {
+                            echo "Frontend Docker image not found locally. Flagging for build."
+                            shouldBuildFrontend = true
+                        }
+
+                        // Check git diff
+                        def hasParent = sh(script: 'git rev-parse --verify HEAD~1 >/dev/null 2>&1 && echo "yes" || echo "no"', returnStdout: true).trim()
+                        if (hasParent != 'yes') {
+                            echo "Initial commit or shallow clone. Flagging all for build."
+                            shouldBuildApi = true
+                            shouldBuildFrontend = true
+                        } else {
+                            def diffTarget = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT
+                            def changedFiles = ""
+                            if (diffTarget && sh(script: "git rev-parse --verify ${diffTarget} >/dev/null 2>&1 && echo 'yes' || echo 'no'", returnStdout: true).trim() == 'yes') {
+                                changedFiles = sh(script: "git diff --name-only ${diffTarget} HEAD", returnStdout: true).trim()
+                            } else {
+                                changedFiles = sh(script: "git diff --name-only HEAD~1 HEAD", returnStdout: true).trim()
+                            }
+
+                            echo "Changed files in commit:"
+                            echo changedFiles ?: "(none detected)"
+
+                            if (!changedFiles) {
+                                if (!shouldBuildApi && !shouldBuildFrontend) {
+                                    echo "No code changes detected. Rebuilding all services by default."
+                                    shouldBuildApi = true
+                                    shouldBuildFrontend = true
+                                }
+                            } else {
+                                def filesList = changedFiles.split('\n')
+                                def apiChanged = filesList.any { it.startsWith('01_api/') }
+                                def frontendChanged = filesList.any { it.startsWith('02_frontend/') }
+                                def coreChanged = filesList.any { it == 'docker-compose.yml' || it.startsWith('.env') || it == 'Jenkinsfile' }
+
+                                if (coreChanged) {
+                                    echo "Core/shared files changed. Building all services."
+                                    shouldBuildApi = true
+                                    shouldBuildFrontend = true
+                                } else {
+                                    if (apiChanged) shouldBuildApi = true
+                                    if (frontendChanged) shouldBuildFrontend = true
+                                }
+                            }
+                        }
+                    }
+
+                    env.BUILD_API = "${shouldBuildApi}"
+                    env.BUILD_FRONTEND = "${shouldBuildFrontend}"
+
+                    echo "=== Build Decision ==="
+                    echo "Build API:      ${env.BUILD_API}"
+                    echo "Build Frontend: ${env.BUILD_FRONTEND}"
+                    echo "======================"
+                }
+            }
+        }
+
+        stage('Build Services') {
+            parallel {
+                stage('Build API') {
+                    when {
+                        expression { return env.BUILD_API == 'true' }
+                    }
+                    steps {
+                        script {
+                            echo "Building API service..."
+                            sh 'docker compose build --no-cache api'
+                        }
+                    }
+                }
+
+                stage('Build Frontend') {
+                    when {
+                        expression { return env.BUILD_FRONTEND == 'true' }
+                    }
+                    steps {
+                        script {
+                            echo "Building Frontend service..."
+                            sh 'docker compose build --no-cache frontend'
+                        }
                     }
                 }
             }
@@ -84,19 +207,13 @@ API_HOST=${params.API_HOST}
                 script {
                     echo "Deploying to production using Docker Compose..."
 
-                    // Stop existing containers
-                    def downCommand = 'docker compose down'
                     if (params.CLEAN_VOLUMES) {
                         echo "WARNING: Removing volumes (database will be cleared)"
-                        downCommand = 'docker compose down -v'
+                        sh 'docker compose down -v'
                     }
-                    sh downCommand
 
-                    // Build and start services
-                    sh """
-                        docker compose build --no-cache
-                        docker compose up -d
-                    """
+                    // docker compose up -d will recreate containers whose images were updated
+                    sh 'docker compose up -d'
 
                     echo "Deployment completed"
                 }
@@ -144,7 +261,6 @@ API_HOST=${params.API_HOST}
                         echo "=== Deployed Services ==="
                         echo "Frontend: http://localhost:3000"
                         echo "API: http://localhost:3001"
-                        echo "phpMyAdmin: http://localhost:8888"
                     """
                 }
             }
@@ -160,7 +276,6 @@ API_HOST=${params.API_HOST}
             echo "Access your application:"
             echo "  - Frontend: http://localhost:3000"
             echo "  - API: http://localhost:3001"
-            echo "  - phpMyAdmin: http://localhost:8888"
         }
         failure {
             echo "❌ Deployment failed!"
@@ -177,4 +292,5 @@ API_HOST=${params.API_HOST}
             """
         }
     }
+}
 }

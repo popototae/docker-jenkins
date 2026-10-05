@@ -1,0 +1,10 @@
+{
+  "name": "docker-jenkins-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test:api": "npm --prefix 01_api test",
+    "test:frontend": "npm --prefix 02_frontend test",
+    "test": "npm run test:api && npm run test:frontend"
+  }
+}
