@@ -245,7 +245,7 @@ API_HOST=${params.API_HOST}
             steps {
                 script {
                     echo "Waiting for services to start..."
-                    sh 'sleep 10'
+                    sh 'sleep 15'
 
                     echo "Performing health check..."
 
@@ -255,15 +255,15 @@ API_HOST=${params.API_HOST}
 
                         # Wait for API to be ready (max 60 seconds)
                         echo "Checking API health (port 3001)..."
-                        timeout 60 bash -c 'until curl -f http://localhost:3001/health; do sleep 2; done' || exit 1
+                        timeout 60 bash -c 'until curl -s -f -m 5 --connect-timeout 3 http://localhost:3001/health || curl -s -f -m 5 --connect-timeout 3 http://127.0.0.1:3001/health; do sleep 2; done' || exit 1
 
                         # Check attractions endpoint
                         echo "Checking API attractions endpoint..."
-                        curl -f http://localhost:3001/attractions || exit 1
+                        curl -s -f -m 10 http://localhost:3001/attractions || curl -s -f -m 10 http://127.0.0.1:3001/attractions || exit 1
 
-                        # Wait for Frontend to be ready (max 60 seconds)
+                        # Wait for Frontend to be ready (max 90 seconds)
                         echo "Checking Frontend (port 3000)..."
-                        timeout 60 bash -c 'until curl -f http://localhost:3000; do sleep 2; done' || exit 1
+                        timeout 90 bash -c 'until curl -s -f -m 5 --connect-timeout 3 -o /dev/null http://localhost:3000 || curl -s -f -m 5 --connect-timeout 3 -o /dev/null http://127.0.0.1:3000; do echo "Waiting for Frontend to respond..."; sleep 3; done' || exit 1
 
                         echo "All health checks passed!"
                     """
