@@ -293,4 +293,3 @@ API_HOST=${params.API_HOST}
         }
     }
 }
-}
