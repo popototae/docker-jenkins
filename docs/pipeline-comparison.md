@@ -1,5 +1,7 @@
 # Comparing Jenkins and GitHub Actions
 
+For a Thai walkthrough of both pipelines and every script, see [คู่มือไปป์ไลน์ภาษาไทย](pipeline-guide-th.md).
+
 Both pipelines use the same scripts:
 
 | Step | Shared command |
