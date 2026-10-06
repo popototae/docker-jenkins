@@ -1,0 +1,91 @@
+name: CI/CD Pipeline (GitHub Actions)
+
+# Run manually to compare with Jenkins without deploying twice on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      force_build_all:
+        description: Force rebuild both API and Frontend regardless of changes
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  unit-tests:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [01_api, 02_frontend]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Unit Tests
+        env:
+          SERVICE_DIR: ${{ matrix.service }}
+        run: sh scripts/test-service.sh "$SERVICE_DIR"
+
+  deploy:
+    name: Build, Deploy and Health Check
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate SSH Host Verification
+        env:
+          SSH_FINGERPRINT: ${{ secrets.VPS_HOST_KEY_FINGERPRINT }}
+        run: |
+          if [ -z "$SSH_FINGERPRINT" ]; then
+            echo 'Set VPS_HOST_KEY_FINGERPRINT from the trusted VPS host key before deploying.' >&2
+            exit 1
+          fi
+
+      - name: Deploy Tested Commit to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          APP_DIR: ${{ secrets.VPS_APP_DIR || '/var/lib/jenkins/workspace/docker-jenkins-pipeline' }}
+          DEPLOY_SHA: ${{ github.sha }}
+          FORCE_BUILD_ALL: ${{ inputs.force_build_all && 'true' || 'false' }}
+          MYSQL_ROOT_PASS: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASS: ${{ secrets.MYSQL_PASSWORD }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_KEY_FINGERPRINT }}
+          port: 22
+          command_timeout: 30m
+          envs: APP_DIR,DEPLOY_SHA,FORCE_BUILD_ALL,MYSQL_ROOT_PASS,MYSQL_PASS
+          script: |
+            set -eu
+            cd "$APP_DIR"
+            case "$DEPLOY_SHA" in
+              ''|*[!0-9a-fA-F]*) echo 'Invalid deploy commit' >&2; exit 2 ;;
+            esac
+
+            git fetch origin main
+            git cat-file -e "${DEPLOY_SHA}^{commit}"
+            git reset --hard "$DEPLOY_SHA"
+            echo "Deploying tested commit $DEPLOY_SHA"
+
+            sh scripts/prepare-environment.sh
+            docker compose config --quiet
+            selected=$(sh scripts/select-builds.sh "$FORCE_BUILD_ALL")
+            printf '%s\n' "$selected"
+            build_api=$(printf '%s\n' "$selected" | sed -n 's/^BUILD_API=//p')
+            build_frontend=$(printf '%s\n' "$selected" | sed -n 's/^BUILD_FRONTEND=//p')
+
+            sh scripts/build-services.sh "$build_api" "$build_frontend"
+            sh scripts/deploy-stack.sh
