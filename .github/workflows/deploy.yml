@@ -71,6 +71,21 @@ jobs:
           script: |
             set -eu
             cd "$APP_DIR"
+            checkout_owner=$(stat -c '%U' .git)
+            deploy_as_owner() {
+              if [ "$checkout_owner" = "$(id -un)" ]; then
+                sh -s
+              else
+                echo "Running deployment as checkout owner: $checkout_owner"
+                sudo -n -H -u "$checkout_owner" \
+                  --preserve-env=APP_DIR,DEPLOY_SHA,FORCE_BUILD_ALL,MYSQL_ROOT_PASS,MYSQL_PASS,COMPOSE_PROJECT_NAME \
+                  sh -s
+              fi
+            }
+
+            deploy_as_owner <<'DEPLOY'
+            set -eu
+            cd "$APP_DIR"
             case "$DEPLOY_SHA" in
               ''|*[!0-9a-fA-F]*) echo 'Invalid deploy commit' >&2; exit 2 ;;
             esac
@@ -89,3 +104,4 @@ jobs:
 
             sh scripts/build-services.sh "$build_api" "$build_frontend"
             sh scripts/deploy-stack.sh
+            DEPLOY

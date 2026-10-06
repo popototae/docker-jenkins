@@ -32,8 +32,9 @@ Jenkins requires string credentials `MYSQL_ROOT_PASSWORD` and `MYSQL_PASSWORD`.
 GitHub Actions requires repository secrets:
 
 - `VPS_HOST`: the VPS IP or hostname.
-- `VPS_USER`: the SSH account that has Docker access and read/write access to the checkout,
-  its Git metadata, and `.env`.
+- `VPS_USER`: the SSH account. If it owns the checkout, it needs Docker and checkout access.
+  If the checkout belongs to another account (for example `jenkins`), it needs noninteractive
+  sudo permission to run the deployment as that owner while preserving the named CI variables.
 - `VPS_SSH_KEY`: the private SSH key for that account.
 - `VPS_HOST_KEY_FINGERPRINT`: the trusted SSH server key fingerprint (`SHA256:...`),
   verified through the VPS console or an existing trusted connection. The workflow requires
@@ -50,9 +51,12 @@ selection. If changing directories, set `COMPOSE_PROJECT_NAME` to the existing p
 in the SSH account's environment before running the shared scripts; otherwise Compose may
 create a separate stack and database volume.
 
-If Jenkins owns the checkout and private `.env`, a different SSH account needs appropriate
-access. Do not make `.env` world-readable to work around that. The SSH account must also be
-able to fetch this Git repository. The workflow does not create a checkout or install SSH keys.
+The workflow checks the owner of `.git` and executes the deployment as that owner. An SSH
+login as `ubuntu` can therefore deploy into a Jenkins-owned checkout without changing file
+ownership or making the private `.env` world-readable. This requires `sudo -n` when the two
+accounts differ; no password prompt is possible in Actions. The checkout owner must have
+Docker access and be able to fetch this Git repository. The workflow does not create a
+checkout or install SSH keys.
 
 ## Run a comparison
 
