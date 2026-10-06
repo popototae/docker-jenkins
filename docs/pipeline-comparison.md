@@ -12,8 +12,11 @@ Both pipelines use the same scripts:
 | Deploy, wait for readiness, and verify real HTTP responses | `sh scripts/deploy-stack.sh` |
 
 Tests use Node 22 and `npm ci --include=dev`. The test helper uses host Node only when its
-major version is 22; otherwise it uses `node:22-alpine` with the caller's UID/GID. Both
-application builds use the same Dockerfiles and `--pull --no-cache` on the VPS. Deployment
+major version is 22; otherwise it uses `node:22-alpine` with the caller's UID/GID. Tests
+extract `git archive HEAD` into a fresh temporary directory, so they test the checked-out
+commit without modifying or relying on workspace `node_modules` or untracked `.env` files.
+The container path receives the archive over stdin instead of mounting the workspace.
+Both application builds use the same Dockerfiles and `--pull --no-cache` on the VPS. Deployment
 waits up to 180 seconds for readiness, then checks HTML and actual frontend/API JSON.
 Database volumes are preserved.
 
