@@ -7,7 +7,6 @@ pipeline {
     }
 
     environment {
-        // Both jobs target the existing stack, even with different workspace names.
         COMPOSE_PROJECT_NAME = 'docker-jenkins-pipeline'
         DEPLOY_ENV_FILE = '/var/lib/jenkins/docker-jenkins.env'
     }
@@ -29,9 +28,9 @@ pipeline {
             }
         }
 
-        stage('Test API') {
+        stage('Test Frontend') {
             steps {
-                // Test committed code in a fresh container; ignore old node_modules.
+                // Include the root package required by the frontend file:.. dependency.
                 sh '''
                     set -eu
                     archive=$(mktemp)
@@ -43,40 +42,35 @@ pipeline {
                             set -eu
                             mkdir /tmp/source
                             tar -x -C /tmp/source
-                            cd /tmp/source/01_api
+                            cd /tmp/source/02_frontend
                             npm ci --include=dev
-                            npm test
+                            npm test -- --runInBand
                         ' < "$archive"
                 '''
             }
         }
 
-        stage('Build API') {
+        stage('Build Frontend') {
             steps {
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" build api'
+                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" build frontend'
             }
         }
 
-        stage('Start MySQL') {
+        stage('Deploy Frontend') {
             steps {
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --wait --wait-timeout 180 mysql'
+                // API must already be deployed; do not recreate API or MySQL here.
+                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --wait --wait-timeout 180 frontend'
             }
         }
 
-        stage('Deploy API') {
-            steps {
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --wait --wait-timeout 180 api'
-            }
-        }
-
-        stage('Check API') {
+        stage('Check Frontend') {
             steps {
                 sh '''
                     set -eu
-                    port=$(docker compose --env-file "$DEPLOY_ENV_FILE" port api 3001 | awk -F: 'NR == 1 {print $NF}')
+                    port=$(docker compose --env-file "$DEPLOY_ENV_FILE" port frontend 3000 | awk -F: 'NR == 1 {print $NF}')
                     test -n "$port"
-                    curl -4 -fsS --connect-timeout 3 --max-time 5 "http://127.0.0.1:$port/health"
-                    curl -4 -fsS --connect-timeout 3 --max-time 5 "http://127.0.0.1:$port/attractions"
+                    curl -4 -fsS --connect-timeout 3 --max-time 5 -o /dev/null "http://127.0.0.1:$port/"
+                    curl -4 -fsS --connect-timeout 3 --max-time 5 "http://127.0.0.1:$port/api/attractions"
                 '''
             }
         }
@@ -84,10 +78,10 @@ pipeline {
 
     post {
         success {
-            echo 'API deployment passed. Frontend was not redeployed.'
+            echo 'Frontend deployment passed.'
         }
         failure {
-            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 mysql api || true'
+            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 frontend api || true'
         }
     }
 }

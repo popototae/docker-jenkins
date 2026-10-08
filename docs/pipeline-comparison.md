@@ -1,5 +1,7 @@
 # Comparing Jenkins and GitHub Actions
 
+> Jenkins now uses separate inline API/frontend pipelines. See [the current Thai setup guide](jenkins-simple-th.md). The shared-script Jenkins comparison below describes the previous design; GitHub Actions still uses the scripts.
+
 For a Thai walkthrough of both pipelines and every script, see [คู่มือไปป์ไลน์ภาษาไทย](pipeline-guide-th.md).
 
 Both pipelines use the same scripts:

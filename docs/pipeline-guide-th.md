@@ -1,5 +1,7 @@
 # คู่มือไปป์ไลน์ Jenkins และ GitHub Actions
 
+> Jenkins ปัจจุบันแยกเป็น API และ Frontend แล้ว ดู [คู่มือ Jenkins แบบง่าย](jenkins-simple-th.md) ส่วนคำอธิบาย Jenkins ที่เรียก shared scripts ด้านล่างเป็นรูปแบบเดิมก่อนแยก ส่วน GitHub Actions ยังใช้ shared scripts อยู่
+
 เอกสารนี้อธิบายโค้ดของโปรเจกต์ ณ วันที่ 6 ตุลาคม 2026 ทั้งสองระบบใช้สคริปต์ชุดเดียวกันสำหรับทดสอบ เตรียมค่าตั้งต้น เลือกบริการที่จะ build และ deploy ความต่างหลักคือ **Jenkins ทำงานบน agent ส่วน GitHub Actions ทดสอบบน GitHub runner แล้ว SSH ไป build และ deploy บน VPS**
 
 ## 1. ภาพรวมและคำศัพท์
