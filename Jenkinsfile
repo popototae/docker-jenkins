@@ -1,93 +1,90 @@
 pipeline {
     agent any
 
+    tools {
+        nodejs 'Node22'
+    }
+
     options {
         disableConcurrentBuilds()
         skipDefaultCheckout(true)
     }
 
     environment {
-        // Both jobs target the existing stack, even with different workspace names.
         COMPOSE_PROJECT_NAME = 'docker-jenkins-pipeline'
         DEPLOY_ENV_FILE = '/var/lib/jenkins/docker-jenkins.env'
+        API_URL = 'http://127.0.0.1:3001'
     }
 
     stages {
         stage('Checkout') {
             steps {
+                echo 'Clean this job workspace and checkout code'
+                deleteDir()
                 checkout scm
             }
         }
 
-        stage('Check Configuration') {
+        stage('Prepare Environment') {
             steps {
-                sh '''
-                    set -eu
-                    test -r "$DEPLOY_ENV_FILE"
-                    docker compose --env-file "$DEPLOY_ENV_FILE" config --quiet
-                '''
+                echo 'Validate Compose using the shared environment file'
+                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" config --quiet'
+            }
+        }
+
+        stage('Install API Dependencies') {
+            steps {
+                dir('01_api') {
+                    sh 'npm ci --include=dev'
+                }
             }
         }
 
         stage('Test API') {
             steps {
-                // Test committed code in a fresh container; ignore old node_modules.
-                sh '''
-                    set -eu
-                    archive=$(mktemp)
-                    trap 'rm -f "$archive"' EXIT
-                    git archive --output="$archive" HEAD
-                    docker run --rm -i --user "$(id -u):$(id -g)" \
-                        -e HOME=/tmp -e npm_config_cache=/tmp/npm-cache \
-                        node:22-alpine sh -c '
-                            set -eu
-                            mkdir /tmp/source
-                            tar -x -C /tmp/source
-                            cd /tmp/source/01_api
-                            npm ci --include=dev
-                            npm test
-                        ' < "$archive"
-                '''
+                dir('01_api') {
+                    sh 'npm test'
+                }
             }
         }
 
         stage('Build API') {
             steps {
+                echo 'Build the API Docker image'
                 sh 'docker compose --env-file "$DEPLOY_ENV_FILE" build api'
             }
         }
 
         stage('Start MySQL') {
             steps {
+                echo 'Start MySQL and wait for it to become healthy'
                 sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --wait --wait-timeout 180 mysql'
             }
         }
 
         stage('Deploy API') {
             steps {
+                echo 'Update only the API container'
                 sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --wait --wait-timeout 180 api'
             }
         }
 
         stage('Check API') {
             steps {
-                sh '''
-                    set -eu
-                    port=$(docker compose --env-file "$DEPLOY_ENV_FILE" port api 3001 | awk -F: 'NR == 1 {print $NF}')
-                    test -n "$port"
-                    curl -4 -fsS --connect-timeout 3 --max-time 5 "http://127.0.0.1:$port/health"
-                    curl -4 -fsS --connect-timeout 3 --max-time 5 "http://127.0.0.1:$port/attractions"
-                '''
+                echo 'Check API health and attractions endpoints'
+                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 "$API_URL/health"'
+                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 "$API_URL/attractions"'
             }
         }
     }
 
     post {
         success {
-            echo 'API deployment passed. Frontend was not redeployed.'
+            echo 'API deployment passed'
         }
         failure {
-            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 mysql api || true'
+            echo 'Show MySQL and API logs'
+            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 mysql api'
         }
     }
 }

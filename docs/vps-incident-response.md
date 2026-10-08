@@ -1,5 +1,7 @@
 # VPS investigation and patched deployment
 
+> Historical investigation notes. The diagnostic collector and deployment helper scripts have been removed. For the current pipelines, see [the Jenkins setup guide](jenkins-simple-th.md).
+
 ## What the available evidence means
 
 The frontend log contains an unexpected `Error: x` digest whose Base64 content is the
@@ -19,24 +21,7 @@ possible. Do not purge logs, prune Docker resources, or run unknown discovered s
 
 ## Collect host evidence
 
-Copy the script from the trusted local checkout to the VPS. From Windows PowerShell:
-
-```powershell
-scp "D:\Work\docker jenkins\scripts\collect-vps-evidence.sh" ubuntu@138.2.70.183:~/collect-vps-evidence.sh
-```
-
-On the Ubuntu VPS:
-
-```bash
-sudo bash ~/collect-vps-evidence.sh
-```
-
-The script writes a private directory and `.tar.gz` under `/var/tmp`, prints their actual
-paths, and leaves services, firewall rules, credentials, and existing files unchanged.
-Each command is limited to 30 seconds. Check exit-status markers: skipped/timed-out checks
-need follow-up. The report is sensitive; share privately and redact credentials before
-pasting excerpts. Use the archive's printed path when copying it with `sudo cp`, then
-`sudo chown ubuntu:ubuntu` and `chmod 600` if downloading through the Ubuntu account.
+The former collector has been removed from this repository at the user's request. The report-file descriptions below refer to evidence collected earlier.
 
 Investigate these report files first:
 
@@ -86,11 +71,8 @@ is overridden to 8.5.29 and the lockfile resolves patched Sharp. Application ima
 application filesystems. These controls reduce exposure; they do not make a vulnerable
 application safe or clean an already-compromised host.
 
-Review and commit the local files, then push through your normal trusted Git workflow. Run
-Jenkins with `FORCE_BUILD_ALL=true` for the first remediation deployment. Both Docker builds
-pull supported base images and avoid previous build caches. Compose waits for database,
-API, frontend, and proxied data readiness. Docker Compose v2.20+ is recommended for these
-readiness options; verify the VPS with `docker compose version`.
+For current deployment instructions, use the [Jenkins setup guide](jenkins-simple-th.md).
+The previous force-build parameter and scripted deployment checks have been removed.
 
 To verify on the VPS from the Jenkins checkout:
 
@@ -99,12 +81,12 @@ cd /var/lib/jenkins/workspace/docker-jenkins-pipeline
 docker compose ps
 docker compose exec -T frontend node -p "require('next/package.json').version"
 docker compose exec -T frontend id
-sh scripts/check-deployment.sh
+curl -4 -fsS --connect-timeout 3 --max-time 5 http://127.0.0.1:3000/api/attractions
 docker compose logs --since=10m frontend api
 ```
 
 The frontend should be healthy, Next.js should report `15.5.27`, the application user should
-be non-root, and three rounds of HTTP checks should complete within each request's five-second
+be non-root, and HTTP checks should complete within each request's five-second
 limit. Check from a browser/public network too: local health does not verify provider firewall,
 external routes, or user-browser behavior. If delays remain, correlate a slow request's time
 with host/container/network logs rather than raising the timeout again.

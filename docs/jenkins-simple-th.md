@@ -50,9 +50,18 @@ sudo usermod -aG docker jenkins
 sudo systemctl restart jenkins
 ```
 
-Node.js บน VPS ไม่จำเป็นสำหรับ pipeline ใหม่นี้ เพราะ unit tests รันใน `node:22-alpine` ส่วน Dockerfiles ใช้ Node 22 เช่นกัน
+Jenkins เตรียม Node.js ผ่าน NodeJS plugin ตามขั้นตอนด้านล่าง ส่วน Dockerfiles ใช้ Node 22 เหมือนเดิม
 
 ## สิ่งที่คุณต้องตั้งในหน้า Jenkins
+
+### 0. ตั้ง Node.js ให้ Jenkins
+
+1. Manage Jenkins → Plugins → Available plugins → ติดตั้ง **NodeJS**
+2. Manage Jenkins → Tools → NodeJS installations → Add NodeJS
+3. ตั้ง Name เป็น **`Node22`** ให้ตรงตัวพิมพ์ใน Jenkinsfile
+4. เลือก Install automatically และเลือก Node.js รุ่น **22.x** แล้ว Save
+
+ทั้งสอง pipeline ใช้ `tools { nodejs 'Node22' }` ให้ Jenkins จัดการ Node/npm จึงไม่ต้องเขียน shell ตรวจเวอร์ชันหรือสร้าง test container
 
 ### 1. ปิด job เก่าก่อน
 
@@ -91,35 +100,51 @@ Disable job เดิม `docker-jenkins-pipeline` เพื่อหยุด p
 
 ```text
 API:
-Checkout → Check Configuration → Test API → Build API
+Checkout → Prepare Environment → Install API Dependencies → Test API → Build API
 → Start MySQL → Deploy API → Check API
 
 Frontend:
-Checkout → Check Configuration → Test Frontend → Build Frontend
+Checkout → Prepare Environment → Install Frontend Dependencies → Test Frontend → Build Frontend
 → Deploy Frontend → Check Frontend
 ```
 
-- **Check Configuration:** ตรวจว่าอ่านไฟล์กลางได้และ Compose configuration ใช้ได้
-- **Test:** archive tracked `HEAD` แล้วส่งเข้า Docker container ชั่วคราว ติดตั้ง package และรัน tests จึงไม่ชนกับ `node_modules` เก่าที่มี permission ต่างกัน
+- **Checkout:** `deleteDir()` ล้างเฉพาะ workspace ของ job แล้ว `checkout scm` ดึงโค้ดใหม่ ไฟล์ environment กลางอยู่ภายนอก workspace จึงยังอยู่
+- **Prepare Environment:** ตรวจ Compose configuration โดยอ่านไฟล์กลาง
+- **Install Dependencies:** Jenkins `dir(...)` เข้าโฟลเดอร์แอป แล้ว `npm ci --include=dev` ติดตั้งตาม lockfile
+- **Test:** `npm test` ทดสอบบน agent ด้วย Node 22 ที่ Jenkins จัดการ
 - **Build:** `docker compose build` เฉพาะบริการ ใช้ Docker cache ตามปกติเพื่อให้ง่ายและเร็ว
 - **Start MySQL:** API job เปิด/อัปเดต MySQL ตาม Compose และรอ healthy โดยใช้ volume เดิม
 - **Deploy:** `up -d --no-deps --wait --wait-timeout 180` เฉพาะแอปของ job นั้น จึงไม่สั่ง deploy อีกแอปตาม dependency
-- **Check:** อ่าน published port จาก Compose แล้ว curl endpoints ด้วย timeout
+- **Check:** curl endpoints ด้วย timeout ใช้ API port 3001 และ frontend port 3000 หากตั้ง port ต่างออกไปให้แก้ `API_URL` / `FRONTEND_URL` ใน pipeline ให้ตรง
 - **Failure:** แสดง logs ของบริการที่เกี่ยวข้อง ไม่มี automatic rollback
 
 Frontend ต้องมี API ที่พร้อมอยู่ก่อน เพราะหน้าเว็บและ health check เรียก API ผ่าน proxy `/api/attractions` หาก API ใช้งานไม่ได้ frontend job จะไม่ผ่าน health check แม้ build หน้าเว็บสำเร็จ
 
 Compose และ Dockerfiles ยังคงกำหนดการ build, network และ health checks เหมือนเดิม ไม่สั่ง `down -v`, ไม่ลบฐานข้อมูล และไม่ใช้ `--remove-orphans` ในสอง job นี้
 
-## GitHub Actions และเอกสารเก่า
+## Jenkins steps ที่ใช้
 
-GitHub Actions ยังเป็นแบบ manual และยังใช้ shared scripts เดิม ไม่ได้ถูกแยกตาม Jenkins ใหม่ อย่ารัน GitHub deploy พร้อม Jenkins job เพราะทั้งสองแก้ stack เดียวกัน
+- `pipeline`: โครงหลักของงาน
+- `agent`: เครื่องที่รันงาน
+- `tools`: ให้ Jenkins เตรียม Node.js
+- `environment`: ค่าที่แต่ละ stage ใช้ร่วมกัน
+- `stages` / `stage` / `steps`: ลำดับงานและสิ่งที่ทำในแต่ละงาน
+- `deleteDir`: ล้าง workspace ของ job
+- `checkout scm`: ดึงโค้ดจาก repository ที่ job ตั้งไว้
+- `dir`: เปลี่ยนโฟลเดอร์ให้ steps ข้างใน
+- `echo`: แสดงข้อความใน log
+- `sh`: Jenkins step ที่เรียกคำสั่งบน Linux เช่น `npm test` หรือ `docker compose build api` ไม่ใช่การเรียกไฟล์ `.sh`
+- `post`: สิ่งที่ทำหลังงานสำเร็จหรือล้มเหลว
 
-เมื่อสลับจาก Jenkins กลับไปทดสอบ GitHub ให้เลือก `force_build_all=true` เพราะ Jenkins แบบใหม่นี้ไม่อัปเดต marker ที่ GitHub ใช้เลือก build
+ไม่มี shell function, loop, trap, archive หรือ `sh -c` ใน Jenkinsfile ใหม่ แต่ยังใช้ `sh 'คำสั่ง'` เพื่อเรียก npm/Docker/curl ตามหน้าที่ของ Jenkins บน Linux
 
-ไฟล์ `.env` ที่ GitHub สร้างใน workspace เก่า กับไฟล์กลางของ Jenkins เป็นคนละไฟล์ ต้องใช้ค่าฐานข้อมูลและ ports ตรงกัน หากต้องการเปรียบเทียบต่อภายหลัง
+## GitHub Actions
 
-คู่มือ `pipeline-guide-th.md` และ `pipeline-comparison.md` อธิบาย Jenkins รุ่น shared scripts ก่อนการแยกนี้ สำหรับ Jenkins ปัจจุบันให้อ่านเอกสารนี้
+GitHub Actions ยังเป็นแบบ manual โดยติดตั้ง dependency และทดสอบบน runner แล้ว SSH ไป build/deploy ทั้งสองบริการบน VPS ใช้ไฟล์ environment กลางเดียวกับ Jenkins และไม่เรียกไฟล์ `.sh` แล้ว อย่ารัน GitHub deploy พร้อม Jenkins job เพราะทั้งสองแก้ stack เดียวกัน
+
+GitHub ไม่ใช้ MYSQL secrets เพื่อสร้าง `.env` อีกต่อไป ต้องมีไฟล์กลางบน VPS ที่เจ้าของ checkout อ่านได้ ส่วน SSH secrets และ `VPS_APP_DIR` ยังใช้เหมือนเดิม หาก checkout ไม่ได้เป็นของ `jenkins` ต้องจัดสิทธิ์อ่านไฟล์กลางให้บัญชีเจ้าของ checkout ด้วย
+
+ไม่มี `force_build_all` หรือ marker แล้ว GitHub build ทั้ง API/frontend ทุกครั้ง และตรวจพอร์ต 3001/3000 ตามค่ามาตรฐาน
 
 ## สิ่งที่ทำจากเครื่องพัฒนาได้และสิ่งที่ต้องทำบนเซิร์ฟเวอร์
 

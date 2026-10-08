@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    tools {
+        nodejs 'Node22'
+    }
+
     options {
         disableConcurrentBuilds()
         skipDefaultCheckout(true)
@@ -9,79 +13,71 @@ pipeline {
     environment {
         COMPOSE_PROJECT_NAME = 'docker-jenkins-pipeline'
         DEPLOY_ENV_FILE = '/var/lib/jenkins/docker-jenkins.env'
+        FRONTEND_URL = 'http://127.0.0.1:3000'
     }
 
     stages {
         stage('Checkout') {
             steps {
+                echo 'Clean this job workspace and checkout code'
+                deleteDir()
                 checkout scm
             }
         }
 
-        stage('Check Configuration') {
+        stage('Prepare Environment') {
             steps {
-                sh '''
-                    set -eu
-                    test -r "$DEPLOY_ENV_FILE"
-                    docker compose --env-file "$DEPLOY_ENV_FILE" config --quiet
-                '''
+                echo 'Validate Compose using the shared environment file'
+                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" config --quiet'
+            }
+        }
+
+        stage('Install Frontend Dependencies') {
+            steps {
+                dir('02_frontend') {
+                    sh 'npm ci --include=dev'
+                }
             }
         }
 
         stage('Test Frontend') {
             steps {
-                // Include the root package required by the frontend file:.. dependency.
-                sh '''
-                    set -eu
-                    archive=$(mktemp)
-                    trap 'rm -f "$archive"' EXIT
-                    git archive --output="$archive" HEAD
-                    docker run --rm -i --user "$(id -u):$(id -g)" \
-                        -e HOME=/tmp -e npm_config_cache=/tmp/npm-cache \
-                        node:22-alpine sh -c '
-                            set -eu
-                            mkdir /tmp/source
-                            tar -x -C /tmp/source
-                            cd /tmp/source/02_frontend
-                            npm ci --include=dev
-                            npm test -- --runInBand
-                        ' < "$archive"
-                '''
+                dir('02_frontend') {
+                    sh 'npm test -- --runInBand'
+                }
             }
         }
 
         stage('Build Frontend') {
             steps {
+                echo 'Build the frontend Docker image'
                 sh 'docker compose --env-file "$DEPLOY_ENV_FILE" build frontend'
             }
         }
 
         stage('Deploy Frontend') {
             steps {
-                // API must already be deployed; do not recreate API or MySQL here.
+                echo 'Update only frontend; API must already be running'
                 sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --wait --wait-timeout 180 frontend'
             }
         }
 
         stage('Check Frontend') {
             steps {
-                sh '''
-                    set -eu
-                    port=$(docker compose --env-file "$DEPLOY_ENV_FILE" port frontend 3000 | awk -F: 'NR == 1 {print $NF}')
-                    test -n "$port"
-                    curl -4 -fsS --connect-timeout 3 --max-time 5 -o /dev/null "http://127.0.0.1:$port/"
-                    curl -4 -fsS --connect-timeout 3 --max-time 5 "http://127.0.0.1:$port/api/attractions"
-                '''
+                echo 'Check the page and its API proxy'
+                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 -o /dev/null "$FRONTEND_URL/"'
+                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 "$FRONTEND_URL/api/attractions"'
             }
         }
     }
 
     post {
         success {
-            echo 'Frontend deployment passed.'
+            echo 'Frontend deployment passed'
         }
         failure {
-            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 frontend api || true'
+            echo 'Show frontend and API logs'
+            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 frontend api'
         }
     }
 }
