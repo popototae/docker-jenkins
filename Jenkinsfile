@@ -36,17 +36,10 @@ pipeline {
                         string(credentialsId: 'MYSQL_ROOT_PASSWORD', variable: 'MYSQL_ROOT_PASS'),
                         string(credentialsId: 'MYSQL_PASSWORD', variable: 'MYSQL_PASS')
                     ]) {
-                        // Quote literal passwords for Compose, including $ and backslashes.
-                        def quote = { value ->
-                            if (!value || value.contains('\n') || value.contains('\r')) {
-                                error('MySQL credentials must be nonempty single-line values')
-                            }
-                            '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '$$') + '"'
-                        }
-                        writeFile file: '.env', text: """MYSQL_ROOT_PASSWORD=${quote(env.MYSQL_ROOT_PASS)}
+                        writeFile file: '.env', text: """MYSQL_ROOT_PASSWORD=${env.MYSQL_ROOT_PASS}
 MYSQL_DATABASE=attractions_db
 MYSQL_USER=attractions_user
-MYSQL_PASSWORD=${quote(env.MYSQL_PASS)}
+MYSQL_PASSWORD=${env.MYSQL_PASS}
 MYSQL_PORT=3306
 API_PORT=3001
 DB_PORT=3306
