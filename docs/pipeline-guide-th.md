@@ -16,10 +16,10 @@
 
 ## ทำความเข้าใจ Jenkins steps
 
-ตัวอย่างจาก API pipeline:
+ตัวอย่าง Jenkins steps ใน API pipeline:
 
 ```groovy
-stage('Install API Dependencies') {
+stage('Unit Test') {
     steps {
         dir('01_api') {
             sh 'npm ci --include=dev'
@@ -32,6 +32,8 @@ stage('Install API Dependencies') {
 
 `dir` คือ Jenkins step สำหรับเลือกโฟลเดอร์ ส่วน `sh` คือ Jenkins step ที่ใช้รันคำสั่งบน Linux คำสั่ง `npm ci` เป็นงานของ npm จึงยังต้องเรียกผ่าน `sh` ไม่ใช่ชื่อ Jenkins step โดยตรง
 
+`environment` มีเพียง `BUILD_TAG` เหมือนต้นฉบับ ส่วนค่าฐานข้อมูลเขียนลง `.env` ด้วย `withCredentials` และ `writeFile`
+
 Pipeline ใช้ `tools { nodejs 'Node22' }` ให้ Jenkins จัดการ Node/npm ไม่เขียน shell ตรวจ Node หรือสร้าง test container เอง
 
 ## Flow API
@@ -40,18 +42,16 @@ Pipeline ใช้ `tools { nodejs 'Node22' }` ให้ Jenkins จัดกา
 Checkout
   deleteDir() → checkout scm
 Prepare Environment
+  withCredentials → writeFile .env
+Validate
   docker compose config --quiet
-Install API Dependencies
-  dir('01_api') → npm ci --include=dev
-Test API
-  dir('01_api') → npm test
+Unit Test
+  dir('01_api') → npm ci --include=dev → npm test
 Build API
   docker compose build api
-Start MySQL
-  docker compose up mysql และรอ healthy
-Deploy API
-  docker compose up api โดยไม่ deploy dependency ซ้ำ
-Check API
+Deploy
+  docker compose up mysql และรอ healthy แล้ว up api
+Health Check
   curl /health และ /attractions
 ```
 
@@ -61,16 +61,16 @@ Check API
 Checkout
   deleteDir() → checkout scm
 Prepare Environment
+  withCredentials → writeFile .env
+Validate
   docker compose config --quiet
-Install Frontend Dependencies
-  dir('02_frontend') → npm ci --include=dev
-Test Frontend
-  dir('02_frontend') → npm test -- --runInBand
+Unit Test
+  dir('02_frontend') → npm ci --include=dev → npm test -- --runInBand
 Build Frontend
   docker compose build frontend
-Deploy Frontend
+Deploy
   docker compose up frontend โดยไม่ deploy API/MySQL
-Check Frontend
+Health Check
   curl / และ /api/attractions
 ```
 
@@ -87,7 +87,7 @@ flowchart LR
 
 Frontend ใช้ Next.js rewrite ส่ง `/api/attractions` ไป API ภายใน Docker network API query MySQL แล้วส่ง JSON กลับมา
 
-Compose เก็บข้อมูลใน volume `mysql_data` ทั้งสอง job ใช้ project name เดียวกันคือ `docker-jenkins-pipeline` และไฟล์กลาง `/var/lib/jenkins/docker-jenkins.env` ตรวจว่าตรงกับระบบเดิมก่อนเริ่มตามคู่มือตั้งค่า
+Compose เก็บข้อมูลใน volume `mysql_data` ทั้งสอง job ใช้ project name จาก `name: docker-jenkins-pipeline` ใน Compose และสร้าง `.env` ของตัวเองจาก Jenkins credentials ชุดเดียวกัน ตรวจว่าตรงกับระบบเดิมก่อนเริ่มตามคู่มือตั้งค่า
 
 API job ต้องผ่านก่อนรัน frontend ครั้งแรก เพราะ frontend health check ตรวจ proxy ไป API ด้วย HTTP checks ของ pipeline ใช้พอร์ต API 3001 และ frontend 3000 หากเปลี่ยน port ให้แก้ URL ตรวจสอบด้วย
 
@@ -102,4 +102,4 @@ API job ต้องผ่านก่อนรัน frontend ครั้ง�
 
 ไม่มีไฟล์ `.sh`, การเลือก build จาก Git diff หรือ marker ใน pipeline แล้ว สำหรับ GitHub คำสั่ง remote ยังเขียนใน `script:` ของ SSH action เพราะเป็นการสั่งงาน VPS ผ่าน SSH
 
-อย่ารัน GitHub deploy พร้อม Jenkins ให้เปรียบเทียบทีละระบบโดยใช้ commit เดียวกัน
+Jenkins มี polling เหมือนต้นฉบับ หากทดสอบ GitHub ให้ Disable Jenkins jobs ชั่วคราว และเปรียบเทียบทีละระบบโดยใช้ commit เดียวกัน

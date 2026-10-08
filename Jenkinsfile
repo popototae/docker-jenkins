@@ -10,81 +10,114 @@ pipeline {
         skipDefaultCheckout(true)
     }
 
+    triggers {
+        pollSCM('H/2 * * * *')
+    }
+
     environment {
-        COMPOSE_PROJECT_NAME = 'docker-jenkins-pipeline'
-        DEPLOY_ENV_FILE = '/var/lib/jenkins/docker-jenkins.env'
-        API_URL = 'http://127.0.0.1:3001'
+        BUILD_TAG = "${env.BUILD_NUMBER}"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                echo 'Clean this job workspace and checkout code'
+                echo 'Checking out code...'
                 deleteDir()
                 checkout scm
+                echo "Build: ${BUILD_TAG}, Commit: ${env.GIT_COMMIT}"
             }
         }
 
         stage('Prepare Environment') {
             steps {
-                echo 'Validate Compose using the shared environment file'
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" config --quiet'
-            }
-        }
-
-        stage('Install API Dependencies') {
-            steps {
-                dir('01_api') {
-                    sh 'npm ci --include=dev'
+                script {
+                    echo 'Preparing environment configuration...'
+                    withCredentials([
+                        string(credentialsId: 'MYSQL_ROOT_PASSWORD', variable: 'MYSQL_ROOT_PASS'),
+                        string(credentialsId: 'MYSQL_PASSWORD', variable: 'MYSQL_PASS')
+                    ]) {
+                        // Quote literal passwords for Compose, including $ and backslashes.
+                        def quote = { value ->
+                            if (!value || value.contains('\n') || value.contains('\r')) {
+                                error('MySQL credentials must be nonempty single-line values')
+                            }
+                            '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '$$') + '"'
+                        }
+                        writeFile file: '.env', text: """MYSQL_ROOT_PASSWORD=${quote(env.MYSQL_ROOT_PASS)}
+MYSQL_DATABASE=attractions_db
+MYSQL_USER=attractions_user
+MYSQL_PASSWORD=${quote(env.MYSQL_PASS)}
+MYSQL_PORT=3306
+API_PORT=3001
+DB_PORT=3306
+FRONTEND_PORT=3000
+NODE_ENV=production
+API_HOST_INTERNAL=http://api:3001
+"""
+                        sh 'chmod 600 .env'
+                        echo '.env file created successfully'
+                    }
                 }
             }
         }
 
-        stage('Test API') {
+        stage('Validate') {
             steps {
+                echo 'Validating Docker Compose configuration...'
+                sh 'docker compose config --quiet'
+            }
+        }
+
+        stage('Unit Test') {
+            steps {
+                echo 'Running API unit tests...'
                 dir('01_api') {
+                    sh 'npm ci --include=dev'
                     sh 'npm test'
                 }
             }
         }
 
-        stage('Build API') {
+        stage('Build') {
             steps {
-                echo 'Build the API Docker image'
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" build api'
+                echo 'Building API...'
+                sh 'docker compose build --no-cache api'
             }
         }
 
-        stage('Start MySQL') {
+        stage('Deploy') {
             steps {
-                echo 'Start MySQL and wait for it to become healthy'
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --wait --wait-timeout 180 mysql'
+                echo 'Deploying API using Docker Compose...'
+                sh 'docker compose up -d --wait --wait-timeout 180 mysql'
+                sh 'docker compose up -d --no-deps --wait --wait-timeout 180 api'
             }
         }
 
-        stage('Deploy API') {
+        stage('Health Check') {
             steps {
-                echo 'Update only the API container'
-                sh 'docker compose --env-file "$DEPLOY_ENV_FILE" up -d --no-deps --wait --wait-timeout 180 api'
+                echo 'Performing health check...'
+                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 http://127.0.0.1:3001/health'
+                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 http://127.0.0.1:3001/attractions'
             }
         }
 
-        stage('Check API') {
+        stage('Verify Deployment') {
             steps {
-                echo 'Check API health and attractions endpoints'
-                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 "$API_URL/health"'
-                sh 'curl -4 -fsS --connect-timeout 3 --max-time 5 "$API_URL/attractions"'
+                echo 'Verifying deployed services...'
+                sh 'docker compose ps'
+                sh 'docker compose logs --tail=20 api'
             }
         }
     }
 
     post {
         success {
-            echo 'API deployment passed'
+            echo 'API deployment completed successfully!'
+            echo "Build: ${BUILD_TAG}, Commit: ${env.GIT_COMMIT}"
         }
         failure {
-            echo 'Show MySQL and API logs'
-            sh 'docker compose --env-file "$DEPLOY_ENV_FILE" logs --tail=50 mysql api'
+            echo 'Deployment failed. Printing container logs...'
+            sh 'docker compose logs --tail=50 api'
         }
     }
 }
